@@ -1,11 +1,11 @@
 {
-  "name": "LSS Addon",
+  "name": "LSS D&D Automatisation Addon",
   "version": "0.1.0",
   "manifest_version": 1,
   "action": {
-    "title": "D&D Helper",
-    "icon": "icon.svg",
-    "popover": "index.html",
+    "title": "LSS D&D Automatisation Addon",
+    "icon": "/lss-dnd-automatisation-addon/icon.svg",
+    "popover": "/lss-dnd-automatisation-addon/index.html",
     "height": 300,
     "width": 320
   }
