@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>D&D Helper</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      background: #1e2231;
+      color: #fff;
+      margin: 0;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    button {
+      padding: 10px 14px;
+      border: none;
+      border-radius: 6px;
+      background: #5865f2;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    button:hover { background: #4752c4; }
+    button:disabled { background: #444; cursor: not-allowed; }
+    .status {
+      font-size: 13px;
+      padding: 10px;
+      background: #2b3044;
+      border-radius: 6px;
+      color: #cbd5e1;
+    }
+  </style>
+</head>
+<body>
+  <div id="status" class="status">Подключение к Owlbear...</div>
+  <button id="bind-btn" disabled>1. Привязать выбранную фишку</button>
+  <button id="cone-btn" disabled>2. Тест: Конус 15 фт</button>
+
+  <script type="module">
+    import OBR, { buildPath, Command } from "https://esm.sh/@owlbear-rodeo/sdk";
+
+    const TOOL_ID = "com.dnd-helper/tool";
+    const MODE_ID = "com.dnd-helper/cone-mode";
+    const HALF_ANGLE = Math.atan(0.5);
+    const ICON_URL = new URL("icon.svg", window.location.href).href;
+
+    let boundTokenId = null;
+    let activeConeLengthPx = 0;
+    let casterPos = { x: 0, y: 0 };
+    let interactionControl = null;
+
+    const statusEl = document.getElementById("status");
+    const bindBtn = document.getElementById("bind-btn");
+    const coneBtn = document.getElementById("cone-btn");
+
+    function getConeCommands(lengthPx, angleRad) {
+      const x1 = Math.cos(angleRad - HALF_ANGLE) * lengthPx;
+      const y1 = Math.sin(angleRad - HALF_ANGLE) * lengthPx;
+      const x2 = Math.cos(angleRad + HALF_ANGLE) * lengthPx;
+      const y2 = Math.sin(angleRad + HALF_ANGLE) * lengthPx;
+
+      return [
+        [Command.MOVE, 0, 0],
+        [Command.LINE, x1, y1],
+        [Command.LINE, x2, y2],
+        [Command.CLOSE],
+      ];
+    }
+
+    OBR.onReady(async () => {
+      statusEl.textContent = "Готово! Выдели фишку на карте и нажми «Привязать».";
+      bindBtn.disabled = false;
+
+      await OBR.tool.create({
+        id: TOOL_ID,
+        icons: [{ icon: ICON_URL, label: "Прицеливание D&D" }],
+      });
+
+      await OBR.tool.createMode({
+        id: MODE_ID,
+        icons: [{ icon: ICON_URL, label: "Конус", filter: { activeTools: [TOOL_ID] } }],
+        async onActivate() {
+          const cone = buildPath()
+            .commands(getConeCommands(activeConeLengthPx, 0))
+            .position(casterPos)
+            .fillColor("#ff5500")
+            .fillOpacity(0.35)
+            .strokeColor("#ff5500")
+            .strokeWidth(3)
+            .layer("POINTER")
+            .build();
+
+          const [update, stop] = await OBR.interaction.startItemInteraction(cone);
+          interactionControl = { update, stop };
+        },
+        onToolMove(_context, event) {
+          if (!interactionControl) return;
+          const dx = event.pointerPosition.x - casterPos.x;
+          const dy = event.pointerPosition.y - casterPos.y;
+          const angle = Math.atan2(dy, dx);
+
+          interactionControl.update((item) => {
+            item.commands = getConeCommands(activeConeLengthPx, angle);
+          });
+        },
+        async onToolClick(_context, event) {
+          if (!interactionControl) return;
+          const dx = event.pointerPosition.x - casterPos.x;
+          const dy = event.pointerPosition.y - casterPos.y;
+          const angle = Math.atan2(dy, dx);
+
+          interactionControl.stop();
+          interactionControl = null;
+
+          const finalCone = buildPath()
+            .commands(getConeCommands(activeConeLengthPx, angle))
+            .position(casterPos)
+            .fillColor("#ff5500")
+            .fillOpacity(0.35)
+            .strokeColor("#ff5500")
+            .strokeWidth(3)
+            .layer("DRAWING")
+            .build();
+
+          await OBR.scene.items.addItems([finalCone]);
+          await OBR.tool.activateTool("rodeo.owlbear.tool/move");
+          statusEl.textContent = "Конус применён на стол!";
+        },
+        onDeactivate() {
+          if (interactionControl) {
+            interactionControl.stop();
+            interactionControl = null;
+          }
+        },
+      });
+
+      bindBtn.addEventListener("click", async () => {
+        const selection = await OBR.player.getSelection();
+        if (!selection || selection.length !== 1) {
+          statusEl.textContent = "Выдели ровно одну фишку на карте!";
+          return;
+        }
+        const items = await OBR.scene.items.getItems(selection);
+        boundTokenId = items[0].id;
+        statusEl.textContent = `Привязана фишка: ${items[0].name || "Без имени"}`;
+        coneBtn.disabled = false;
+      });
+
+      coneBtn.addEventListener("click", async () => {
+        if (!boundTokenId) return;
+        const items = await OBR.scene.items.getItems([boundTokenId]);
+        if (items.length === 0) {
+          statusEl.textContent = "Фишка не найдена на карте.";
+          return;
+        }
+        casterPos = items[0].position;
+
+        const dpi = await OBR.scene.grid.getDpi();
+        const scale = await OBR.scene.grid.getScale();
+        const feetPerCell = scale.parsed.multiplier || 5;
+        activeConeLengthPx = (15 / feetPerCell) * dpi;
+
+        statusEl.textContent = "Наведи курсор на карте и нажми ЛКМ...";
+        await OBR.tool.activateTool(TOOL_ID);
+        await OBR.tool.activateMode(TOOL_ID, MODE_ID);
+      });
+    });
+  </script>
+</body>
+</html>

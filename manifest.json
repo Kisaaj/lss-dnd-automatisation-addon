@@ -1,0 +1,12 @@
+{
+  "name": "LSS Addon",
+  "version": "0.1.0",
+  "manifest_version": 1,
+  "action": {
+    "title": "D&D Helper",
+    "icon": "icon.svg",
+    "popover": "index.html",
+    "height": 300,
+    "width": 320
+  }
+}
