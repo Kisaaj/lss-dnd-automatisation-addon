@@ -2,42 +2,81 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <title>D&D Helper</title>
+  <title>LSS D&D Automatisation Addon</title>
   <style>
+    * { box-sizing: border-box; }
     body {
       font-family: sans-serif;
       background: #1e2231;
       color: #fff;
       margin: 0;
-      padding: 16px;
+      height: 100vh;
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      overflow: hidden;
+    }
+    .toolbar {
+      padding: 8px 10px;
+      background: #161925;
+      border-bottom: 1px solid #2e344b;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
     }
     button {
-      padding: 10px 14px;
+      padding: 6px 10px;
       border: none;
-      border-radius: 6px;
+      border-radius: 5px;
       background: #5865f2;
       color: white;
+      font-size: 12px;
       font-weight: bold;
       cursor: pointer;
     }
     button:hover { background: #4752c4; }
     button:disabled { background: #444; cursor: not-allowed; }
     .status {
-      font-size: 13px;
-      padding: 10px;
-      background: #2b3044;
-      border-radius: 6px;
+      font-size: 12px;
       color: #cbd5e1;
+      flex: 1;
+      min-width: 120px;
+    }
+    .lss-log {
+      background: #0f111a;
+      color: #4ade80;
+      font-family: monospace;
+      font-size: 11px;
+      padding: 6px 10px;
+      max-height: 75px;
+      overflow-y: auto;
+      border-bottom: 1px solid #2e344b;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    iframe {
+      flex: 1;
+      width: 100%;
+      border: none;
+      background: #fff;
     }
   </style>
 </head>
 <body>
-  <div id="status" class="status">Подключение к Owlbear...</div>
-  <button id="bind-btn" disabled>1. Привязать выбранную фишку</button>
-  <button id="cone-btn" disabled>2. Тест: Конус 15 фт</button>
+  <div class="toolbar">
+    <button id="bind-btn" disabled>Привязать фишку</button>
+    <button id="cone-btn" disabled>Конус 15 фт</button>
+    <div id="status" class="status">Подключение...</div>
+  </div>
+
+  <div id="lss-log" class="lss-log">Ожидание событий от Long Story Short...</div>
+
+  <iframe
+    id="lss-frame"
+    src="https://longstoryshort.app/iframe/characters/list/"
+    sandbox="allow-same-origin allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals"
+    allow="clipboard-write"
+  ></iframe>
 
   <script type="module">
     import OBR, { buildPath, Command } from "https://esm.sh/@owlbear-rodeo/sdk";
@@ -53,8 +92,22 @@
     let interactionControl = null;
 
     const statusEl = document.getElementById("status");
+    const logEl = document.getElementById("lss-log");
     const bindBtn = document.getElementById("bind-btn");
     const coneBtn = document.getElementById("cone-btn");
+
+    // --- ПРОСЛУШКА СОБЫТИЙ ОТ LONG STORY SHORT ---
+    window.addEventListener("message", (event) => {
+      // Принимаем сообщения только от longstoryshort.app
+      if (event.origin !== "https://longstoryshort.app") return;
+
+      console.log("LSS Event:", event.data);
+      const text = typeof event.data === "string"
+        ? event.data
+        : JSON.stringify(event.data);
+
+      logEl.textContent = text;
+    });
 
     function getConeCommands(lengthPx, angleRad) {
       const x1 = Math.cos(angleRad - HALF_ANGLE) * lengthPx;
@@ -71,7 +124,7 @@
     }
 
     OBR.onReady(async () => {
-      statusEl.textContent = "Готово! Выдели фишку на карте и нажми «Привязать».";
+      statusEl.textContent = "Готово";
       bindBtn.disabled = false;
 
       await OBR.tool.create({
@@ -127,7 +180,7 @@
 
           await OBR.scene.items.addItems([finalCone]);
           await OBR.tool.activateTool("rodeo.owlbear.tool/move");
-          statusEl.textContent = "Конус применён на стол!";
+          statusEl.textContent = "Конус применён!";
         },
         onDeactivate() {
           if (interactionControl) {
@@ -140,12 +193,12 @@
       bindBtn.addEventListener("click", async () => {
         const selection = await OBR.player.getSelection();
         if (!selection || selection.length !== 1) {
-          statusEl.textContent = "Выдели ровно одну фишку на карте!";
+          statusEl.textContent = "Выдели 1 фишку!";
           return;
         }
         const items = await OBR.scene.items.getItems(selection);
         boundTokenId = items[0].id;
-        statusEl.textContent = `Привязана фишка: ${items[0].name || "Без имени"}`;
+        statusEl.textContent = `Фишка: ${items[0].name || "ОК"}`;
         coneBtn.disabled = false;
       });
 
@@ -153,7 +206,7 @@
         if (!boundTokenId) return;
         const items = await OBR.scene.items.getItems([boundTokenId]);
         if (items.length === 0) {
-          statusEl.textContent = "Фишка не найдена на карте.";
+          statusEl.textContent = "Фишка не найдена";
           return;
         }
         casterPos = items[0].position;
@@ -163,7 +216,7 @@
         const feetPerCell = scale.parsed.multiplier || 5;
         activeConeLengthPx = (15 / feetPerCell) * dpi;
 
-        statusEl.textContent = "Наведи курсор на карте и нажми ЛКМ...";
+        statusEl.textContent = "Жми ЛКМ на карте...";
         await OBR.tool.activateTool(TOOL_ID);
         await OBR.tool.activateMode(TOOL_ID, MODE_ID);
       });
