@@ -5,7 +5,7 @@
   "action": {
     "title": "LSS D&D Automatisation Addon",
     "icon": "/lss-dnd-automatisation-addon/icon.svg",
-    "popover": "/lss-dnd-automatisation-addon/index.html",
+    "popover": "/lss-dnd-automatisation-addon/index.html?v=2",
     "height": 700,
     "width": 520
   }
