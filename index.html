@@ -21,38 +21,34 @@
       border-bottom: 1px solid #2e344b;
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
+      gap: 6px;
       align-items: center;
     }
-    button {
-      padding: 6px 10px;
+    button, select {
+      padding: 5px 8px;
       border: none;
       border-radius: 5px;
-      background: #5865f2;
-      color: white;
       font-size: 12px;
       font-weight: bold;
+    }
+    button {
+      background: #5865f2;
+      color: white;
       cursor: pointer;
     }
     button:hover { background: #4752c4; }
     button:disabled { background: #444; cursor: not-allowed; }
-    .status {
-      font-size: 12px;
-      color: #cbd5e1;
-      flex: 1;
-      min-width: 120px;
+    button.secondary { background: #2b3044; }
+    button.secondary:hover { background: #3b425e; }
+    select {
+      background: #2b3044;
+      color: #fff;
+      cursor: pointer;
     }
-    .lss-log {
-      background: #0f111a;
-      color: #4ade80;
-      font-family: monospace;
+    .status {
       font-size: 11px;
-      padding: 6px 10px;
-      max-height: 75px;
-      overflow-y: auto;
-      border-bottom: 1px solid #2e344b;
-      white-space: pre-wrap;
-      word-break: break-all;
+      color: #94a3b8;
+      width: 100%;
     }
     iframe {
       flex: 1;
@@ -65,11 +61,18 @@
 <body>
   <div class="toolbar">
     <button id="bind-btn" disabled>Привязать фишку</button>
-    <button id="cone-btn" disabled>Конус 15 фт</button>
-    <div id="status" class="status">Подключение...</div>
+    <select id="dist-select">
+      <option value="10">10 фт</option>
+      <option value="15" selected>15 фт</option>
+      <option value="20">20 фт</option>
+      <option value="30">30 фт</option>
+      <option value="60">60 фт</option>
+    </select>
+    <button id="cone-btn" disabled>Конус</button>
+    <button id="circle-btn" disabled>Сфера</button>
+    <button id="reload-btn" class="secondary" title="Обновить лист LSS">🔄</button>
+    <div id="status" class="status">Подключение к Owlbear...</div>
   </div>
-
-  <div id="lss-log" class="lss-log">Ожидание событий от Long Story Short...</div>
 
   <iframe
     id="lss-frame"
@@ -79,34 +82,88 @@
   ></iframe>
 
   <script type="module">
-    import OBR, { buildPath, Command } from "https://esm.sh/@owlbear-rodeo/sdk";
+    import OBR, { buildPath, buildShape, buildLabel, Command } from "https://esm.sh/@owlbear-rodeo/sdk";
 
     const TOOL_ID = "com.dnd-helper/tool";
-    const MODE_ID = "com.dnd-helper/cone-mode";
+    const MODE_CONE = "com.dnd-helper/cone-mode";
+    const MODE_CIRCLE = "com.dnd-helper/circle-mode";
+    const HP_META_KEY = "com.dnd-helper/hp-badge-for";
     const HALF_ANGLE = Math.atan(0.5);
     const ICON_URL = new URL("icon.svg", window.location.href).href;
 
     let boundTokenId = null;
-    let activeConeLengthPx = 0;
+    let activeSizePx = 0;
     let casterPos = { x: 0, y: 0 };
     let interactionControl = null;
+    let lastHealth = null;
 
     const statusEl = document.getElementById("status");
-    const logEl = document.getElementById("lss-log");
     const bindBtn = document.getElementById("bind-btn");
     const coneBtn = document.getElementById("cone-btn");
+    const circleBtn = document.getElementById("circle-btn");
+    const distSelect = document.getElementById("dist-select");
+    const reloadBtn = document.getElementById("reload-btn");
+    const lssFrame = document.getElementById("lss-frame");
 
-    // --- ПРОСЛУШКА СОБЫТИЙ ОТ LONG STORY SHORT ---
-    window.addEventListener("message", (event) => {
-      // Принимаем сообщения только от longstoryshort.app
+    // Кнопка быстрого обновления листа LSS
+    reloadBtn.addEventListener("click", () => {
+      lssFrame.src = lssFrame.src;
+    });
+
+    // --- ОБНОВЛЕНИЕ ПЛАШКИ ХП НА ФИШКЕ ---
+    async function syncHpBadge(current, max, temp = 0) {
+      if (!boundTokenId) return;
+
+      const tokens = await OBR.scene.items.getItems([boundTokenId]);
+      if (tokens.length === 0) return;
+      const token = tokens[0];
+
+      const hpText = temp > 0 ? `❤️ ${current}/${max} (+${temp})` : `❤️ ${current}/${max}`;
+
+      // Ищем, есть ли уже плашка ХП у этой фишки
+      const existingBadges = await OBR.scene.items.getItems(
+        (item) => item.metadata && item.metadata[HP_META_KEY] === boundTokenId
+      );
+
+      if (existingBadges.length > 0) {
+        await OBR.scene.items.updateItems([existingBadges[0].id], (items) => {
+          items[0].text.plainText = hpText;
+        });
+      } else {
+        const badge = buildLabel()
+          .plainText(hpText)
+          .position({ x: token.position.x, y: token.position.y + 70 })
+          .attachedTo(token.id)
+          .locked(true)
+          .disableHit(true)
+          .backgroundColor("#161925")
+          .backgroundOpacity(0.85)
+          .metadata({ [HP_META_KEY]: boundTokenId })
+          .build();
+
+        await OBR.scene.items.addItems([badge]);
+      }
+    }
+
+    // --- ПРОСЛУШКА СОБЫТИЙ ОТ LSS ---
+    window.addEventListener("message", async (event) => {
       if (event.origin !== "https://longstoryshort.app") return;
+      const data = event.data;
+      if (!data || !data.event) return;
 
-      console.log("LSS Event:", event.data);
-      const text = typeof event.data === "string"
-        ? event.data
-        : JSON.stringify(event.data);
+      const { type, payload } = data.event;
 
-      logEl.textContent = text;
+      // 1. Пришло обновление ХП
+      if (type === "dnd:health" && payload) {
+        lastHealth = payload;
+        statusEl.textContent = `ХП из листа: ${payload.current}/${payload.max}`;
+        await syncHpBadge(payload.current, payload.max, payload.temp);
+      }
+
+      // 2. Пришёл бросок из листа
+      if (type === "lss:roll" && payload) {
+        statusEl.textContent = `Действие: ${payload.title} (${payload.formula})`;
+      }
     });
 
     function getConeCommands(lengthPx, angleRad) {
@@ -114,7 +171,6 @@
       const y1 = Math.sin(angleRad - HALF_ANGLE) * lengthPx;
       const x2 = Math.cos(angleRad + HALF_ANGLE) * lengthPx;
       const y2 = Math.sin(angleRad + HALF_ANGLE) * lengthPx;
-
       return [
         [Command.MOVE, 0, 0],
         [Command.LINE, x1, y1],
@@ -123,8 +179,15 @@
       ];
     }
 
+    async function feetToPx(feet) {
+      const dpi = await OBR.scene.grid.getDpi();
+      const scale = await OBR.scene.grid.getScale();
+      const feetPerCell = scale.parsed.multiplier || 5;
+      return (feet / feetPerCell) * dpi;
+    }
+
     OBR.onReady(async () => {
-      statusEl.textContent = "Готово";
+      statusEl.textContent = "Выдели фишку на карте и нажми «Привязать».";
       bindBtn.disabled = false;
 
       await OBR.tool.create({
@@ -132,12 +195,13 @@
         icons: [{ icon: ICON_URL, label: "Прицеливание D&D" }],
       });
 
+      // РЕЖИМ 1: КОНУС (крутится вокруг фишки)
       await OBR.tool.createMode({
-        id: MODE_ID,
+        id: MODE_CONE,
         icons: [{ icon: ICON_URL, label: "Конус", filter: { activeTools: [TOOL_ID] } }],
         async onActivate() {
           const cone = buildPath()
-            .commands(getConeCommands(activeConeLengthPx, 0))
+            .commands(getConeCommands(activeSizePx, 0))
             .position(casterPos)
             .fillColor("#ff5500")
             .fillOpacity(0.35)
@@ -145,31 +209,24 @@
             .strokeWidth(3)
             .layer("POINTER")
             .build();
-
           const [update, stop] = await OBR.interaction.startItemInteraction(cone);
           interactionControl = { update, stop };
         },
-        onToolMove(_context, event) {
+        onToolMove(_ctx, event) {
           if (!interactionControl) return;
-          const dx = event.pointerPosition.x - casterPos.x;
-          const dy = event.pointerPosition.y - casterPos.y;
-          const angle = Math.atan2(dy, dx);
-
+          const angle = Math.atan2(event.pointerPosition.y - casterPos.y, event.pointerPosition.x - casterPos.x);
           interactionControl.update((item) => {
-            item.commands = getConeCommands(activeConeLengthPx, angle);
+            item.commands = getConeCommands(activeSizePx, angle);
           });
         },
-        async onToolClick(_context, event) {
+        async onToolClick(_ctx, event) {
           if (!interactionControl) return;
-          const dx = event.pointerPosition.x - casterPos.x;
-          const dy = event.pointerPosition.y - casterPos.y;
-          const angle = Math.atan2(dy, dx);
-
+          const angle = Math.atan2(event.pointerPosition.y - casterPos.y, event.pointerPosition.x - casterPos.x);
           interactionControl.stop();
           interactionControl = null;
 
           const finalCone = buildPath()
-            .commands(getConeCommands(activeConeLengthPx, angle))
+            .commands(getConeCommands(activeSizePx, angle))
             .position(casterPos)
             .fillColor("#ff5500")
             .fillOpacity(0.35)
@@ -183,42 +240,104 @@
           statusEl.textContent = "Конус применён!";
         },
         onDeactivate() {
-          if (interactionControl) {
-            interactionControl.stop();
-            interactionControl = null;
-          }
+          if (interactionControl) { interactionControl.stop(); interactionControl = null; }
         },
       });
 
+      // РЕЖИМ 2: СФЕРА / КРУГ (двигается за курсором)
+      await OBR.tool.createMode({
+        id: MODE_CIRCLE,
+        icons: [{ icon: ICON_URL, label: "Сфера", filter: { activeTools: [TOOL_ID] } }],
+        async onActivate() {
+          const circle = buildShape()
+            .shapeType("CIRCLE")
+            .width(activeSizePx * 2)
+            .height(activeSizePx * 2)
+            .position(casterPos)
+            .fillColor("#ef4444")
+            .fillOpacity(0.35)
+            .strokeColor("#ef4444")
+            .strokeWidth(3)
+            .layer("POINTER")
+            .build();
+          const [update, stop] = await OBR.interaction.startItemInteraction(circle);
+          interactionControl = { update, stop };
+        },
+        onToolMove(_ctx, event) {
+          if (!interactionControl) return;
+          interactionControl.update((item) => {
+            item.position = event.pointerPosition;
+          });
+        },
+        async onToolClick(_ctx, event) {
+          if (!interactionControl) return;
+          interactionControl.stop();
+          interactionControl = null;
+
+          const finalCircle = buildShape()
+            .shapeType("CIRCLE")
+            .width(activeSizePx * 2)
+            .height(activeSizePx * 2)
+            .position(event.pointerPosition)
+            .fillColor("#ef4444")
+            .fillOpacity(0.35)
+            .strokeColor("#ef4444")
+            .strokeWidth(3)
+            .layer("DRAWING")
+            .build();
+
+          await OBR.scene.items.addItems([finalCircle]);
+          await OBR.tool.activateTool("rodeo.owlbear.tool/move");
+          statusEl.textContent = "Сфера применена!";
+        },
+        onDeactivate() {
+          if (interactionControl) { interactionControl.stop(); interactionControl = null; }
+        },
+      });
+
+      // Привязка фишки
       bindBtn.addEventListener("click", async () => {
         const selection = await OBR.player.getSelection();
         if (!selection || selection.length !== 1) {
-          statusEl.textContent = "Выдели 1 фишку!";
+          statusEl.textContent = "Выдели ровно 1 фишку на карте!";
           return;
         }
         const items = await OBR.scene.items.getItems(selection);
         boundTokenId = items[0].id;
-        statusEl.textContent = `Фишка: ${items[0].name || "ОК"}`;
+        statusEl.textContent = `Привязана: ${items[0].name || "Фишка"}`;
         coneBtn.disabled = false;
+        circleBtn.disabled = false;
+
+        // Если лист уже присылал ХП до привязки — сразу рисуем плашку
+        if (lastHealth) {
+          await syncHpBadge(lastHealth.current, lastHealth.max, lastHealth.temp);
+        }
       });
 
+      // Запуск конуса
       coneBtn.addEventListener("click", async () => {
         if (!boundTokenId) return;
         const items = await OBR.scene.items.getItems([boundTokenId]);
-        if (items.length === 0) {
-          statusEl.textContent = "Фишка не найдена";
-          return;
-        }
+        if (items.length === 0) return;
         casterPos = items[0].position;
+        activeSizePx = await feetToPx(Number(distSelect.value));
 
-        const dpi = await OBR.scene.grid.getDpi();
-        const scale = await OBR.scene.grid.getScale();
-        const feetPerCell = scale.parsed.multiplier || 5;
-        activeConeLengthPx = (15 / feetPerCell) * dpi;
-
-        statusEl.textContent = "Жми ЛКМ на карте...";
+        statusEl.textContent = `Конус ${distSelect.value} фт — жми ЛКМ на карте`;
         await OBR.tool.activateTool(TOOL_ID);
-        await OBR.tool.activateMode(TOOL_ID, MODE_ID);
+        await OBR.tool.activateMode(TOOL_ID, MODE_CONE);
+      });
+
+      // Запуск сферы
+      circleBtn.addEventListener("click", async () => {
+        if (!boundTokenId) return;
+        const items = await OBR.scene.items.getItems([boundTokenId]);
+        if (items.length === 0) return;
+        casterPos = items[0].position;
+        activeSizePx = await feetToPx(Number(distSelect.value));
+
+        statusEl.textContent = `Сфера радиусом ${distSelect.value} фт — жми ЛКМ на карте`;
+        await OBR.tool.activateTool(TOOL_ID);
+        await OBR.tool.activateMode(TOOL_ID, MODE_CIRCLE);
       });
     });
   </script>
